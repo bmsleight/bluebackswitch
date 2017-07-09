@@ -1,16 +1,25 @@
-
+#include <ESP8266WiFi.h>
+#include <ESP8266WebServer.h>
+#include "local_passwords.h"
+// Peter Lerup wonderful espsoftwareserial
 #include <SoftwareSerial.h>
 
 #define BTBRK 4         // BlueTooth Pin to break connection
 #define DEVICENAME "BigBlueN"     // "BigBlueN"
 #define LED 2           // NodeMCU LED
 
-
+ESP8266WebServer server(80);
 SoftwareSerial BTserial(14, 12, false, 256);
+
 int loop_count = 0;
 String inputString = ""; // a string to hold incoming data
 bool confirmed = true;   // All commands have been confirmed
-bool bt_connected = false;   // All commands have been confirmed
+bool bt_connected = false;   // BlueTooth Connected or not
+
+void logging(String log1, String log2="", String log3="")  {
+  String full_log = "Log: " + log1 + " " + log2 + " " + log3;
+  Serial.println(full_log);
+}
 
 String send_bt_at_command(String command, bool reply_to_serial = false) {
   String full_command = "AT+" + command;
@@ -41,16 +50,13 @@ String send_bt_at_command(String command, bool reply_to_serial = false) {
   full_reply.remove(0, 3); // Remove AT+
   if(reply_to_serial)
   {
-    for (int i = 0; i < full_reply.length(); i++)
-    {
-      Serial.write(full_reply[i]);   // Push each char 1 by 1 on each loop pass
-    }
+    logging(full_reply);
   }
   return full_reply;
 }
 
 void btc() {
-  Serial.println("\nReconnect");
+  logging("Reconnect");
 
   // To Wake
   //  - Either send 80 chars AND AT+RENEW
@@ -73,27 +79,27 @@ void btc() {
   send_bt_at_command("ROLE1", true);
 //  delay(1000);
   send_bt_at_command("CON5CF821880465", true);
-  Serial.println("\n :: ");
+  logging("Connected ?");
 }
 
 void btc_disconnect() {
+  logging("Disconnect ?");
   digitalWrite(BTBRK, LOW);    
-  Serial.println("..");
   delay(1100);
   digitalWrite(BTBRK, HIGH);
-
+  logging("Disconnect .,.");
 }
 
 void bt_disconnect_back_to_sleep() {
-  Serial.println("Disconnect");
   btc_disconnect();
   send_bt_at_command("RENEW", true);
   send_bt_at_command("COSU1", true);
   send_bt_at_command("PWRM0", true);
+  logging("Sleep");
 }
 
 void switch_state(String state) {
-  Serial.println(state);
+  logging("switch_state: ", state);
   if (state == "on" ) {
     digitalWrite(LED, LOW);
   }
@@ -102,8 +108,57 @@ void switch_state(String state) {
   }
 }
 
+void handle_index() {
+  String form = "<form action='switch'><input type='radio' name='state'\
+   value='on' checked>On<input type='radio' name='state' \
+   value='off'>Off<input type='submit' value='Submit'></form>";
+  server.send(200, "text/html", form);
+}
+
+void handle_state()
+{
+  if (digitalRead(LED) == LOW) {
+    server.send(200, "text/plain", String("{\"state\": \"on\"}"));    
+  }
+  else {
+    server.send(200, "text/plain", String("{\"state\": \"off\"}"));        
+  }  
+}
+
+void handle_switch() {
+  // get the value of request argument "state" and convert it to an int
+  switch_state(server.arg("state"));
+  handle_state();
+  confirmed = false;
+}
+
+void setup_server()  {
+  logging("setup_server");
+  server.on("/", handle_index);
+  server.on("/switch", handle_switch);
+  server.on("/state", handle_state);
+  server.begin();
+}
+
+void setup_wifi()  {
+  logging("setup_wifi");
+  // Hostname does not actually work
+  WiFi.hostname(DEVICENAME);
+  // Connect to WiFi network
+  WiFi.begin(MYSSID, PASSWORD);  
+  // Wait does not work on nodemcu3
+  // Wait for connection
+//  while (WiFi.status() != WL_CONNECTED) {
+//    delay(500);
+//  }
+  delay(500);
+  logging("WiFi.localIP()", WiFi.localIP().toString());
+}
+
+
 void setup() {
   Serial.begin(9600);
+  logging("setup");
 
   pinMode(BTBRK, OUTPUT);
   btc_disconnect();
@@ -111,7 +166,7 @@ void setup() {
   BTserial.begin(9600);
   delay(4000);
   bt_disconnect_back_to_sleep();
-  Serial.println("\nSoftware serial started");  
+  logging("\nBT to sleep");  
 
   pinMode(LED, OUTPUT);
   switch_state("on");
@@ -121,14 +176,17 @@ void setup() {
   switch_state("on");
   delay(500);
   
-  
+  setup_wifi();
+  setup_server();
 }
 
 void loop() {
-  
+  server.handleClient();
+ 
   if (!confirmed) {
     if (!bt_connected)  {
       btc();
+      // More logic ... btc() return true
       bt_connected = true;
     }
     if (digitalRead(LED) == LOW)  {
@@ -165,12 +223,9 @@ void loop() {
         BTserial.println("R");
       }
       else {
-        Serial.println("Something else:");
+        logging("Something else:");
       }
-      for (int i = 0; i < inputString.length(); i++) {
-        Serial.println(inputString[i]);
-      }
-      inputString = "";
+      logging("inputString", inputString);
     }
     else{
       inputString += inChar;
@@ -188,6 +243,5 @@ void loop() {
     }   
     confirmed = false;
     bt_connected = false;
-//    BTserial.write(Serial.read());
   }
 }
